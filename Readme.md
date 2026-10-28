@@ -1,232 +1,194 @@
-# BLITTO Patent Management System
+# BLITTO PATENT DATABASE
 
-> **Status (2026):** Reimplemented as a **FastAPI + Python** backend — **no database**, all state in-memory/local, for local development and prototyping. Architecture is managed with **graphify** (see *Architecture management* below). The original Java/Spring design intent is preserved in `Agent.md` and `Rules.md`.
+A patent-application management platform for **BLITTO** (Business Linkage Office,
+University of Peradeniya) tracking applications filed with **NIPO** (National
+Intellectual Property Office of Sri Lanka).
 
-A secure, role-based platform for the **Business Linkage Office (BLITTO)** at the University of Peradeniya to manage patent applications filed with the **National Intellectual Property Office of Sri Lanka (NIPO)**.
+Built as a single Laravel 13 application in `backend/`: Blade + Tailwind UI,
+SQLite/Eloquent persistence, session auth, Pest tests. The earlier FastAPI +
+React implementation was replaced by this rewrite and survives only at the git
+tag `pre-laravel-final-state`.
 
 ---
 
 ## Overview
 
-BLITTO serves as the bridge between university inventors and NIPO. Inventors submit patents physically; the system tracks applications through the NIPO examination pipeline. Inventors receive limited, read-only access via user codes to monitor their patent status and receive email notifications on status changes.
+Inventors submit patent disclosures physically through BLITTO. Staff record the
+application, file it with NIPO, and track it through examination, grants and
+maintenance. Inventors get read-only access to their own applications, status
+notifications by email, and download access to granted patents.
 
----
-
-## Tech Stack
+## Tech stack
 
 | Layer | Technology |
-|-------|-----------|
-| Frontend | React (Vite) in `frontend/` — dev proxy `/api` → `localhost:8000` |
-| Backend | FastAPI (Python) |
-| Database | In-memory stores by default; restart-safe SQLite snapshot via `BLITTO_STORAGE=sqlite` (see below). Legacy JSON snapshot in `dev-data/state.json` |
-| Authentication | Local stub (institution email + bcrypt-hashed password, Bearer tokens) — startup refuses the default `BLITTO_AUTH_SECRET` outside `local` env; `/auth/login` throttled (5 fails / 10 min / account → 429). Better-auth JWT/JWKS adapter reserved for prod |
-| Document Storage | Local in-memory/file adapter (default); PKI-encrypted adapter exists but is not the default |
-| Encryption | `PKIEncryptedStore` adapter (RSA/AES hybrid) exists; **default store is plaintext at rest** (see issue #49) |
-| Architecture mgmt | graphify (`graphifyy`) |
+|---|---|
+| Backend | Laravel 13, PHP 8.3, in `backend/` |
+| UI | Blade + Tailwind 4, `DESIGN.md` tokens, cookie-backed dark mode (ADR-0006) |
+| Database | SQLite + Eloquent — 12 FK-constrained tables, created by migrations |
+| Auth | Laravel session auth (`web` guard), institution email policy, roles `user` / `director` / `md` |
+| Documents | `App\Domain\Vault\DocumentStore` with the `LocalDocumentStore` adapter on the private `vault` disk; plaintext at rest (ADR-0004) |
+| Mail | `MailChannel` seam — Laravel mailer in production, in-memory adapter in tests (ADR-0005) |
+| Analytics | `GET /analytics/portfolio`, `GET /analytics/deadlines` for staff |
+| Scheduling | `nipo:follow-up`, scheduled from `BLITTODB_NIPO_FOLLOW_UP_INTERVAL_HOURS` |
+| Architecture | deep modules under `backend/app/Domain/*`, decisions in `docs/adr/` |
 
----
+## Roles
 
-## User Roles (3 types)
+| Role | Capabilities |
+|---|---|
+| **MD** | Everything a Director can do, plus user management (create accounts, list users) |
+| **Director** | Intake, docketing, office actions, filing workflow, document uploads, status changes, portfolio and deadline analytics |
+| **User** | View own applications, review status, download granted patents, receive and read notifications |
 
-### MD
-- Full system access (owns user management: creates Director/MD accounts)
-- Create and manage patent records
-- Generate and assign User Codes to users
-- Upload, encrypt, and manage PDF documents
-- Change patent application status
-- View audit logs and the missing-documents worklist
-- Search all patent metadata
+Institution mail only: registration and login are gated on
+`BLITTODB_ALLOWED_EMAIL_DOMAINS` (default `pdn.ac.lk`). Failed logins are
+throttled per account.
 
-### Director
-- Same use case as MD, except user management (cannot create Director/MD accounts)
-- Create and manage patent records
-- Upload and manage PDF documents, docket deadlines, handle office actions
-- Change patent application status
-- View the missing-documents worklist
-
-### User
-- Register using a User Code provided by BLITTO
-- Log in with email and password
-- View only their own patents (reference code + status)
-- Receive email notifications on status changes
-- Download own GRANTED patent documents (timestamped, audited); if granted but
-  no document is uploaded yet, request it from BLITTO via the portal
-- Register / log in with institution mail only (`pdn.ac.lk`)
-- **No uploads, no metadata beyond status**
-
----
-
-## Authentication Flow
-
-1. **Physical Submission**: Inventor submits patent application physically to BLITTO
-2. **Record Creation**: Director/MD creates patent record in the system
-3. **User Code Generation**: Director/MD generates a unique User Code (e.g., `INV-2026-0042`) and provides it to the user
-4. **Registration**: User registers on the platform using:
-   - User Code (provided by BLITTO)
-   - Institution email address
-   - Self-chosen password
-5. **Access**: User logs in to view patent status and receive notifications
-
----
-
-## Patent Application Lifecycle
+## Application lifecycle
 
 ```
-[Draft] → [Submitted to NIPO] → [Under Examination] → [Office Action]
-    → [Response Filed] → [Allowed] → [Granted]
-                      ↘ [Rejected]
+DRAFT → FILED → PUBLISHED / ACKNOWLEDGED / EXAMINATION / DEFECT_SHEET_1..3 / REJECTED
+      → GRANTED → MAINTENANCE
 ```
 
-> **Status transitions are Director/MD-only.** Users receive email notifications on any status change.
+Illegal transitions are rejected by `App\Domain\Lifecycle`. Office actions
+(except `ALLOWANCE`) auto-docket a `RESPONSE` deadline through
+`App\Domain\Docketing`, the single source of truth for deadlines.
 
----
+## What the application does
 
-## Document Security (current state)
-- **Store selectable via `BLITTO_DOCUMENT_STORE`**: `local` (plaintext, dev-only — startup fails if `environment != local`) or `pki` (RSA-4096 + AES-256-GCM envelope). Production must set `pki`.
-- **Master key never persisted by the app**: the app NEVER logs or persists the key — on first run it exists only in memory (`PKIEncryptedStore.generated_master_key`); the operator must capture it during provisioning into their secret manager as `BLITTO_VAULT_MASTER_KEY`, then `POST /api/vault/unlock`.
-- **Vault gate**: all document endpoints still require an unlocked vault (423 when locked). The PKI store additionally supports encrypt-with-public-key, so uploads can be decoupled from unlock later; the API does not expose that yet (see `test_vault_blocks_upload_when_locked`).
-- **Uploads**: 10 MB cap, extension allow-list, 423 when locked, 429 after 5 failed unlocks per IP / 10 min.
-- **Master-key rotation**: blobs are encrypted to the RSA public key, so rotation only re-wraps the private key (`PKIEncryptedStore.rotate_master_key(old, new)`) — no data re-encryption, no downtime. Operator runbook: unlock with the current key, call `rotate_master_key` with the new 32-byte base64 key, verify `unlock(new)` succeeds and `unlock(old)` fails, then retire the old key in the secret manager.
+- **Applications** — create, list, edit, read status history. Inventors see only
+  their own applications; staff see the full docket.
+- **Status changes** — every change is recorded in `status_history`, audited, and
+  notifies the inventor by email.
+- **Docketing** — deadline types, staff-only creation and listing, analytics on
+  open/overdue work.
+- **Prosecution** — office actions; a received action dockets its response
+  deadline automatically.
+- **Filing workflow** — file → acknowledge → defect sheets (1..3) → grant or
+  reject. Granting without a document warns the caller and notifies the admin.
+- **Documents** — staff upload, list, download and delete; the
+  `missing-documents` worklist lists granted patents with no document. Deleting a
+  document after filing returns `409`.
+- **Granted-patent download** — the owning inventor downloads the granted patent
+  as a single file or a ZIP of every document. A granted patent with no document
+  returns `409` with `code=document_pending`; `POST /applications/{id}/request-document`
+  asks staff to upload it (one open request per user).
+- **Notifications** — email plus a read-only feed (`GET /notifications` and the
+  inventor portal page).
+- **Analytics** — portfolio counts and deadline workload for staff.
+- **NIPO follow-up** — scheduled command that reminds admins about filings that
+  have not been acknowledged.
 
----
+## Setup
 
-## Data Model (in-memory)
+From `backend/`:
 
-> **Restart persistence (issue #51).** All state still lives in process dicts, but
-> `BLITTO_STORAGE=sqlite` (default `memory`) snapshots every module to SQLite on
-> shutdown and restores it on boot — users, applications, documents (+ bytes),
-> audit events and all. Snapshot path: `BLITTO_SQLITE_PATH` (default
-> `dev-data/state.sqlite3`). Tests keep using `memory`.
-> **Migration path:** existing JSON snapshots import cleanly —
-> `python scripts/migrate_state_to_sqlite.py [dev-data/state.json] [dev-data/state.sqlite3]`,
-> then restart with `BLITTO_STORAGE=sqlite`.
+```bash
+composer install
+cp .env.example .env
+php artisan key:generate
+touch database/database.sqlite
+php artisan migrate --seed
+```
 
-| Entity | Key Fields |
-|--------|-----------|
-| **Users** | `id`, `email` (institution mail only), `role` (user/director/md), `user_code`, `created_at` |
-| **Applications** | `id`, `title`, `user_code`, `status`, `inventor_name`, `inventor_email`, `created_at`, `updated_at` |
-| **Documents** | `id`, `application_id`, `filename`, `content_type`, `uploaded_by`, `uploaded_at` |
-| **Deadlines** | `id`, `application_id`, `type` (FILING/RESPONSE/MAINTENANCE_FEE), `status` (OPEN/MET/…), `due_date` |
-| **OfficeActions** | `id`, `application_id`, `kind`, `body` (+ responses) |
-| **Filing** | NIPO ack refs, defect sheets (max 3, numbered 1–3), file/grant/reject records |
-| **AuditLogs** | actor, action (`download_granted_patent`, `grant_without_document`, …), timestamp |
+`migrate --seed` restores the reference demo snapshot through
+`DemoDataSeeder` (`dev-data/seed_snapshot.json`); seed passwords are bcrypt-hashed
+on import.
 
----
+## Run
 
-## API & Backend Notes
+```bash
+cd backend
+npm install
+npm run build
+php artisan serve          # http://127.0.0.1:8000
+```
 
-- **Modular FastAPI monolith** — one deployable; domain modules under
-  `app/modules/<name>/` (`interface.py` Protocol + `local/` in-memory adapter):
-  `application_intake`, `authorization`, `docketing`, `document_vault`,
-  `prosecution`, `filing_workflow`, `portfolio_analytics`, `notification`, `audit`
-- **Routes are dual-mounted** at `/...` and `/api/...` (`app/main.py`); the
-  frontend dev proxy targets `/api`
-- **Authentication**: `POST /auth/register` (self-register as `user`; only MD
-  may create director/MD roles), `POST /auth/login` (public, institution mail),
-  `POST /auth/token` (MD-only), `GET /auth/me`, `GET /users` (MD-only)
-- **Authorization**: role gates on every endpoint (`MDUser`, `StaffUser`
-  = director+md, `CurrentUser`); users see only their own applications
-- **Key flows**: GRANTED download (`GET /applications/{id}/download`, 409
-  `document_pending` when no file yet), `.../request-document` (rate-limited),
-  `GET /applications/missing-documents`, docketing (`POST
-  /applications/{id}/deadlines`, `GET /deadlines`), office actions
-  (auto-docket response deadlines), filing workflow (acknowledge / defect
-  sheets / file / grant / reject), analytics (`/analytics/portfolio`,
-  `/analytics/deadlines`)
-- **Tests**: `make test` (pytest), `make test-cov` (coverage gate: fail under
-  80%), `make test-e2e` (Playwright journeys vs live server, no browsers needed)
+For UI work, `npm run dev` runs Vite alongside the PHP server. The page routes:
+`/login`, staff `/admin/*`, inventor `/user/*`, plus the JSON endpoints under
+`/applications`, `/deadlines`, `/analytics`, `/users`, `/notifications`,
+`/health` and `/auth/*`.
 
----
+## Tests
+
+```bash
+cd backend
+php artisan test --compact     # Pest feature + domain suite
+vendor/bin/pint --test         # style
+php artisan dusk               # browser smoke (needs Chrome + chromedriver)
+```
+
+CI (`.github/workflows/test.yml`) runs the Pest suite and the Dusk smoke suite in
+separate jobs.
+
+## Configuration
+
+Live defaults are in `backend/config/blitto.php`; `.env.example` lists the
+overrides commented out so the suite runs against a clean environment.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `BLITTODB_SERVICE_NAME` | `blitto-patent-database` | Service identifier |
+| `BLITTODB_ENVIRONMENT` | `local` | Environment label |
+| `BLITTODB_ALLOWED_EMAIL_DOMAINS` | `pdn.ac.lk` | Comma-separated institution domains allowed to register/log in |
+| `BLITTODB_BOOTSTRAP_ADMIN_EMAIL` / `_PASSWORD` | empty | Optional first MD account created on boot |
+| `BLITTODB_NIPO_FOLLOW_UP_INTERVAL_HOURS` | `24` | How often the NIPO follow-up checks for unacknowledged filings |
+| `BLITTODB_DOCUMENT_STORE` | `local` | Document adapter; `local` is the only implementation, `pki` fails loudly |
+| `BLITTODB_MAIL_CHANNEL` | `laravel` | Mail adapter: `laravel` (real mailer) or `array` (in-memory, tests) |
+| `BLITTODB_DEMO_SNAPSHOT_PATH` | `../dev-data/seed_snapshot.json` | Snapshot restored by the demo seeder |
+
+Password hashing, session and cache settings come from the standard Laravel
+keys in `.env` (`APP_KEY`, `MAIL_*`, `DB_*`, …). The `APP_KEY` guard is enforced
+outside `local`/`testing`.
+
+## Document security (current state)
+
+- Bytes are stored **plaintext** on the private `vault` disk
+  (`backend/storage/app/vault`), never served directly by the web server.
+  Encryption is deferred and recorded in **ADR-0004**; the `DocumentStore` port is
+  the seam a future encrypted adapter plugs into.
+- Uploads are allow-listed by extension — `.csv .doc .docx .jpeg .jpg .pdf .png .txt .xls .xlsx`
+  — capped at 10 MiB and 255 filename characters.
+- Reads and deletes go through `App\Domain\Vault\DocumentService`, which scopes a
+  document to its application and refuses deletion once the application is filed.
+- Granted-patent downloads require `GRANTED` plus ownership for the `user` role;
+  each inventor download is audited.
 
 ## Deployment
 
-- **Target**: University-owned server (on-premise), single `uvicorn` process
-- **Scale target**: 1,000 users
-- **Database**: none — in-memory stores; optional JSON snapshot persistence via
-  `scripts/persistence.py` (`dev-data/state.json`) for local dev only
+One PHP host with PHP-FPM and a writable `backend/storage` tree:
 
----
+- SQLite database file (`backend/database/database.sqlite`), backed up with the
+  rest of the app.
+- `backend/storage/app/vault` on a private volume (never under the document root).
+- `php artisan migrate --force` on deploy.
+- `php artisan schedule:run` from cron (or `php artisan schedule:work` under a
+  supervisor) for the NIPO follow-up.
+- `MAIL_MAILER` set to a real transport; notifications are persisted first and
+  delivered best-effort.
 
-## Out of Scope
+## Architecture
 
-- Multi-jurisdictional support (NIPO/Sri Lanka only)
-- Full-text PDF search
-- AI/automated features
-- Integration with NIPO APIs (manual status updates)
-- Document versioning
-- Inventor document upload capability
-- Public status check page without login
+- `backend/app/Domain/*` — deep modules: `ApplicationIntake`, `Lifecycle`,
+  `Docketing`, `Prosecution`, `Filing`, `Vault`, `Notification`, `Authorization`,
+  `Audit`, `Analytics`. Business rules live here, not in controllers or models.
+- `backend/app/Http/Controllers` — thin controllers that validate, delegate and
+  render/respond.
+- `backend/app/Models` — persistence-only Eloquent models.
+- `backend/app/Support` — presentation helpers (`Theme`, `Navigation`, `PatentTable`, …).
+- Seams have a production and a test adapter: `DocumentStore`
+  (`LocalDocumentStore` / `Storage::fake('vault')`), `MailChannel`
+  (`LaravelMailChannel` / `ArrayMailChannel`).
 
----
+## Documentation
 
-## Future Considerations
-
-- Document versioning
-- NIPO API integration if available
-- Two-factor authentication (2FA)
-- Self-service password recovery workflows
-
----
-
-## Architecture Management (graphify)
-
-The codebase is a deep-module modular monolith (see `Agent.md`, `Rules.md`). We
-use **graphify** to keep module boundaries visible and to make the code
-queryable for AI agents.
-
-- Install dev deps (graphify needs Python >=3.10): `pip install -e ".[dev]"`
-- Regenerate graph: `make graph` (or `python scripts/run_graphify.py`) — uses the
-  LLM-free `graphify update` path, so no API key is required
-- Runs automatically on every commit via the pre-commit hook
-- Artifacts (in `graphify-out/`): `graph.json` (machine-readable, used for
-  structural codebase queries), `graph.html` (visual), `GRAPH_REPORT.md` (summary)
-- **Codebase searching is done through `graphify-out/graph.json`**, not raw grep
-  (e.g. `graphify path "A" "B"`, `graphify explain "X"`)
-- Wire graphify into your agent: `py -3.14 -m graphify opencode install`
-
-### Caveman review on commit
-
-Every `git commit` runs a **caveman-review gate** (see `docs/adr/0003`):
-- The staged diff is sent to `opencode run ... --auto` in caveman style.
-- **Review-only gate**: opencode reports findings; the commit is **blocked** if
-  any 🔴 bug / 🟡 risk is found, so unfixed issues never ship. Nit/question
-  findings do not block.
-- To actually fix: run `make caveman-fix` (`python scripts/caveman_fix.py
-  --apply`), which has opencode apply the fixes to the working tree, then
-  `git add` + commit (which now passes the gate).
-- **Fail-closed**: if opencode is unavailable/errors, the commit is blocked.
-  Override with `BLITTO_CAVEMAN_ALLOW_SKIP=1`.
-- Config: `BLITTO_CAVEMAN_MODEL` (model), `BLITTO_CAVEMAN_TIMEOUT` (default 300s).
-- Implemented as the `caveman-fix` hook in `.pre-commit-config.yaml`
-  (`scripts/caveman_fix.py`), alongside the `graphify` hook.
-
-Enable both hooks: `pre-commit install` (requires `pip install -e ".[dev]"`).
-
-### Module layout (Python)
-
-```
-app/modules/<name>/interface.py   # XxxModule Protocol (module boundary)
-app/modules/<name>/local/         # in-memory adapter (default)
-app/modules/authorization/better_auth/  # better-auth JWT/JWKS adapter (prod)
-app/adapters/document_storage/    # document storage seam (ports-and-adapters)
-app/adapters/email/               # email provider seam (true-external)
-```
-
-### Run
-
-```bash
-pip install -e ".[dev]"
-uvicorn app.main:app --reload --port 8000
-# docs at http://localhost:8000/docs
-```
-
-### Run the frontend
-
-```bash
-cd frontend && npm install && npm run dev
-# vite dev server proxies /api -> http://localhost:8000
-```
-
-> **Note:** the frontend still uses the pre-merge role model
-> (`admin/attorney/paralegal/inventor`) and does not match the current
-> `user/director/md` API — see issues #9/#10.
+| Document | Contents |
+|---|---|
+| `CONTEXT.md` | Domain glossary, invariants, roles, workflows |
+| `BIGGER_PICTURE.md` | Why the rewrite happened and the L0–L7 roadmap |
+| `DESIGN.md` | Design tokens and UI direction |
+| `docs/adr/` | ADR-0001 … ADR-0006 — architecture decisions |
+| `docs/superpowers/specs/` | Layer designs (L5, L6, migration) |
+| `docs/superpowers/plans/` | Per-layer implementation plans |
+| `backend/AGENTS.md` | Working rules for agents in this repository |

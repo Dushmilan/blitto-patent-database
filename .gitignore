@@ -21,20 +21,12 @@ backend/database/*.sqlite-journal
 .env
 .env.local
 
-# Stale artifacts of removed Python/React codebases
-# (source recoverable at tag pre-laravel-final-state)
-__pycache__/
-*.pyc
-frontend/node_modules/
-frontend/dist/
-
-# Secrets / certs / encrypted data
-certs/
-encrypted_docs/
-
 # OS
 .DS_Store
 Thumbs.db
 
 # Git worktrees (superpowers SDD)
 .worktrees/
+
+# Superpowers SDD scratch (ledger, briefs, review packages)
+.superpowers/

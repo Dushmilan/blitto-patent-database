@@ -46,7 +46,7 @@
                         </button>
                         <div>
                             <p class="text-micro font-semibold uppercase tracking-wider text-steel">
-                                {{ $viewer->role === 'user' ? 'Patent Management' : 'Admin Panel' }}
+                                {{ $viewer->role === 'user' ? 'Inventor Portal' : 'Admin Panel' }}
                             </p>
                             <p class="text-body-sm font-medium text-ink">{{ $title ?? '' }}</p>
                         </div>

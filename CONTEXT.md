@@ -2,7 +2,7 @@
 
 ## Domain Glossary
 
-**Patent Application** -- A legal filing seeking patent protection. Has a lifecycle: DRAFT > FILED > ACKNOWLEDGED > EXAMINATION > GRANTED/REJECTED > MAINTENANCE.
+**Patent Application** -- A legal filing seeking patent protection. Lifecycle: DRAFT → FILED → PUBLISHED / ACKNOWLEDGED / EXAMINATION / DEFECT_SHEET_1..3 / REJECTED → GRANTED → MAINTENANCE; the transition table in `App\Domain\Lifecycle` is authoritative for legal targets and branches.
 
 **Prior Art** -- Any evidence that an invention is already known (prior patents, publications, public use). Must be cited during filing (IDS -- Information Disclosure Statement).
 

@@ -24,6 +24,14 @@ it('shows the inventor nav', function () {
 
 // Task 15 extends this assertion with Notifications once that page exists.
 
+it('labels the portal for inventors', function () {
+    $this->actingAs(User::factory()->create())
+        ->get('/user')
+        ->assertOk()
+        ->assertSee('Inventor Portal')
+        ->assertDontSee('Patent Management');
+});
+
 it('refuses staff a portal page', function () {
     $this->actingAs(User::factory()->md()->create())->get('/user')->assertForbidden();
 });

@@ -54,21 +54,23 @@
 
 | Dependency | Category | Notes |
 |------------|----------|-------|
-| In-memory stores (+ optional `dev-data/state.json` snapshot) | Local (no external DB) | Primary data store; snapshot is local-dev only |
+| SQLite + Eloquent (`backend/database/database.sqlite`) | Local (file DB) | Sole persistence layer; 12 FK-constrained tables created by migrations |
+| Blade + Tailwind UI (`backend/resources/views`) | In-process | Server-rendered screens; `DESIGN.md` tokens; dark mode via a `blitto-theme` cookie |
 | Document storage seam (`App\Domain\Vault\DocumentStore`) | Ports & adapters | Default is the local **plaintext** adapter (`LocalDocumentStore`, private `vault` disk); encryption is deferred (ADR 0004) and `BLITTODB_DOCUMENT_STORE=pki` fails loudly |
 | Mail seam (`App\Domain\Notification\MailChannel`) | True external (mock adapter) | Notifications — production adapter delegates to Laravel's mailer (`MAIL_MAILER`), tests bind the in-memory `ArrayMailChannel` via `BLITTODB_MAIL_CHANNEL=array` (ADR 0005) |
 | NIPO (manual updates) | True external (no API) | Status updates are entered manually; no office API integration |
-| Local auth stub (email + password, Bearer tokens) | Local-substitutable (better-auth JWT/JWKS for prod) | Authentication -- institution mail (`pdn.ac.lk`) enforced |
+| Session auth (`web` guard) | In-process (Laravel) | Institution mail (`pdn.ac.lk`) enforced at registration and login; roles `user`/`director`/`md`; failed logins throttled per account |
 
 ## Non-Functional Requirements
 
 - **Auditability** -- Every mutation is traceable to an actor and timestamp
 - **Latency** -- Dashboard loads < 2s
-- **Testability** -- Business logic tested through module interfaces, not through HTTP
-- **Deployability** -- Single `uvicorn` deployment (on-premise); no DB migrations (no database)
+- **Testability** -- Business logic tested through public interfaces (domain services and HTTP routes), not internals
+- **Deployability** -- Single Laravel deployment (PHP-FPM + SQLite, on-premise); schema owned by migrations; `php artisan schedule:run` drives follow-ups
 
+## Implemented UI (L6)
 
-- **UI (L6):** server-rendered Blade pages under `/login`, `/admin/*` and
+- Server-rendered Blade pages under `/login`, `/admin/*` and
   `/user/*`, alongside the JSON API at the root paths. Mutations are real forms
   posting to the existing JSON routes; those routes branch on `expectsJson()`
   (JSON for API clients, redirect + flash for browsers).

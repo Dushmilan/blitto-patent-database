@@ -1,4 +1,4 @@
-# BLITTO Patent Management System -- Domain Context
+# BLITTO PATENT DATABASE — Domain Context
 
 ## Domain Glossary
 

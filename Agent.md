@@ -112,8 +112,8 @@ review_checklist:
 
 priority_order:
   - "Vault"
-  - "ApplicationIntake"
   - "Lifecycle"
+  - "ApplicationIntake"
   - "Authorization"
   - "Docketing"
   - "Prosecution"

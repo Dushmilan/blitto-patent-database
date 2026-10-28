@@ -5,7 +5,7 @@
 > `docs/superpowers/specs/2026-10-09-blitto-patent-database-laravel-migration-design.md`
 > (§3 Approach, §9 test porting, §12 porting/dual-run risks). Everything else in
 > that spec (architecture, schema, security, rename map) still applies.
-> Tracking issue: [#65](https://github.com/Dushmilan/BLITTO--MANAGEMENT/issues/65)
+> Tracking issue: [#65](https://github.com/Dushmilan/blitto-patent-database/issues/65)
 > (closed at L7).
 
 ## 1. What we are building

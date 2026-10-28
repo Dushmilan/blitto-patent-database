@@ -1,9 +1,5 @@
 <?php
 
-pest()->extend(Tests\DuskTestCase::class)
-//  ->use(Illuminate\Foundation\Testing\DatabaseMigrations::class)
-    ->in('Browser');
-
 use App\Domain\Lifecycle\ApplicationStatus;
 use App\Models\Application;
 use App\Models\AuditLog;
@@ -18,7 +14,12 @@ use App\Models\Response;
 use App\Models\StatusHistory;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Tests\DuskTestCase;
 use Tests\TestCase;
+
+pest()->extend(DuskTestCase::class)
+//  ->use(Illuminate\Foundation\Testing\DatabaseMigrations::class)
+    ->in('Browser');
 
 pest()->extend(TestCase::class)->in('Feature');
 pest()->extend(RefreshDatabase::class)->in('Feature');
